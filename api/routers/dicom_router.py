@@ -1,6 +1,5 @@
-# api/routers/dicom_router.py
 import tempfile
-from PIL import Image   # <<< CORREGIDO: estaba importando tkinter
+from PIL import Image
 from typing import Optional
 import uuid
 import zipfile
@@ -22,37 +21,40 @@ router = APIRouter()
 @router.post("/upload-dicom")
 async def upload_dicom(file: UploadFile = File(...)):
     try:
-        # Guardar temporalmente el archivo
-        contents = await file.read()
-        temp_path = f"temp_{file.filename}"
-        with open(temp_path, "wb") as f:
-            f.write(contents)
+        # === CAMBIO: Usar tempfile para gestión segura de archivos temporales ===
+        # Esto garantiza que el archivo se elimine automáticamente al salir del bloque 'with'.
+        with tempfile.NamedTemporaryFile(delete=True, suffix=file.filename) as tmp:
+            
+            # Guardar el contenido en el archivo temporal
+            contents = await file.read()
+            tmp.write(contents)
+            tmp_path = tmp.name # Obtiene la ruta del archivo temporal
 
-        # Leer el archivo con pydicom
-        dicom = pydicom.dcmread(temp_path)
+            # Leer el archivo con pydicom
+            dicom = pydicom.dcmread(tmp_path)
 
-        # Extraer metadatos
-        metadata = {
-            "PatientID": dicom.get("PatientID", "N/A"),
-            "StudyDate": dicom.get("StudyDate", "N/A"),
-            "Modality": dicom.get("Modality", "N/A"),
-            "Rows": dicom.get("Rows", "N/A"),
-            "Columns": dicom.get("Columns", "N/A"),
-            "NumberOfFrames": dicom.get("NumberOfFrames", "1"),
-            "SOPInstanceUID": dicom.get("SOPInstanceUID", "N/A"),
-        }
-
-        # Borrar archivo temporal
-        os.remove(temp_path)
-
-        return JSONResponse(
-            content={
-                "message": "Archivo DICOM subido y procesado exitosamente.",
-                "metadata": metadata,
+            # Extraer metadatos
+            metadata = {
+                "PatientID": dicom.get("PatientID", "N/A"),
+                "StudyDate": dicom.get("StudyDate", "N/A"),
+                "Modality": dicom.get("Modality", "N/A"),
+                "Rows": dicom.get("Rows", "N/A"),
+                "Columns": dicom.get("Columns", "N/A"),
+                "NumberOfFrames": dicom.get("NumberOfFrames", "1"),
+                "SOPInstanceUID": dicom.get("SOPInstanceUID", "N/A"),
             }
-        )
+
+            # Ya no se necesita os.remove(temp_path)
+
+            return JSONResponse(
+                content={
+                    "message": "Archivo DICOM subido y procesado exitosamente.",
+                    "metadata": metadata,
+                }
+            )
 
     except Exception as e:
+        # Captura errores de procesamiento DICOM o cualquier otro error
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
@@ -68,6 +70,7 @@ async def upload_dicom_series(
     try:
         zip_bytes = await file.read()
 
+        # El servicio de conversión guardará los archivos en el volumen persistente
         result = convert_dicom_zip_to_png_paths(zip_bytes, user_id=x_user_id)
         return JSONResponse(content=result)
 
@@ -78,17 +81,18 @@ async def upload_dicom_series(
 @router.post("/segmentar-dicom/")
 async def segmentar_dicom_endpoint(file: UploadFile = File(...)):
     try:
-        contents = await file.read()
-        temp_dir = tempfile.mkdtemp()
-        dicom_path = os.path.join(temp_dir, file.filename)
+        # === CAMBIO: Usar tempfile para gestión segura de archivos temporales ===
+        with tempfile.NamedTemporaryFile(delete=True, suffix=file.filename) as tmp:
+            contents = await file.read()
+            tmp.write(contents)
+            dicom_path = tmp.name
+        
+            # Esto asume que el servicio segmentar_dicom lee el archivo, 
+            # pero no guarda el resultado de forma permanente en esta función.
+            from ..services.segmentation_services import segmentar_dicom
+            resultado = segmentar_dicom(dicom_path)
 
-        with open(dicom_path, "wb") as f:
-            f.write(contents)
-
-        from ..services.segmentation_services import segmentar_dicom
-        resultado = segmentar_dicom(dicom_path)
-
-        return resultado
+            return resultado
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
@@ -97,7 +101,10 @@ async def segmentar_dicom_endpoint(file: UploadFile = File(...)):
 @router.get("/series-mapping/")
 def obtener_mapping_de_serie(session_id: str = Query(..., description="UUID de la serie cargada")):
     try:
+        # Nota: Usar BASE_DIR puede ser inconsistente con la ruta de montaje del volumen.
+        # Por ahora, confiamos en la ruta de archivos estáticos.
         BASE_DIR = Path(__file__).resolve().parent.parent
+        # La ruta del mapping debe coincidir con la ruta donde está montado el volumen en el contenedor
         mapping_path = BASE_DIR / "static" / "series" / session_id / "mapping.json"
 
         if not mapping_path.exists():
@@ -120,6 +127,7 @@ async def segmentar_desde_mapping(
     x_user_id: int = Header(..., alias="X-User-Id"),
 ):
     try:
+        # Esta ruta debe coincidir con la ruta base del Volumen /api/static/series/
         base_dir = os.path.join("api", "static", "series", session_id)
         mapping_path = os.path.join(base_dir, "mapping.json")
 
