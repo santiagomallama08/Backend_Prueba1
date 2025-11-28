@@ -1,0 +1,57 @@
+# Entornos virtuales
+venv/
+env/
+.venv/
+.env/
+
+# Archivos de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos de configuración de sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de logs
+*.log
+
+# Archivos de salida o build
+*.out
+build/
+dist/
+
+
+# Configuración de IDEs
+.vscode/
+.idea/
+
+# Ignorar todos los archivos dentro de outputs/
+outputs/*
+
+# Ignorar carpeta de imágenes generadas
+static/segmentations
+
+# Ignorar carpeta de imágenes generadas
+api/static/segmentations
+
+# Ignorar carpeta de imágenes generadas
+api/static/reportes
+
+# Ignorar carpeta de imágenes generadas
+api/static/series/
+
+# Ignorar carpeta de imágenes generadas
+api/static/segmentations3d
+
+#Ignorea los uploads
+uploads
+
+# Ignorar carpeta de imágenes generadas
+api/static/models/
+ 
+# Environment variables
+.env
+*.env
+.env.*
