@@ -1,21 +1,21 @@
-# Usa una imagen base de Python oficial y optimizada
+# Usa una imagen base ligera
 FROM python:3.11-slim
 
-# Establece el directorio de trabajo, que es /app. 
-# Esta es la base para tu ruta de volumen: /app/static/series
+# Establecemos el directorio de trabajo
 WORKDIR /app
 
-# Copia solo el archivo de dependencias primero
+# Copiamos requirements
 COPY requirements.txt .
 
-# Instala las dependencias necesarias para tu aplicación (incluyendo pydicom, fastapi, etc.)
-# y los paquetes de producción (Gunicorn, uvicorn workers)
+# Instalamos dependencias
 RUN pip install --no-cache-dir -r requirements.txt gunicorn uvicorn[standard]
 
-# Copia el resto del código de la aplicación
+# Copiamos toda la aplicación
 COPY . .
 
-# Expón el puerto que usa tu aplicación
-EXPOSE 8000
+# Railway asigna dinámicamente el puerto → EXPOSE es opcional
+# EXPOSE 8000   # puedes quitarlo o dejarlo, no afecta
 
+# Comando CORREGIDO:
+# Usamos "sh -c" para que la variable $PORT se expanda correctamente
 CMD ["sh", "-c", "gunicorn -w 4 -k uvicorn.workers.UvicornWorker api.main:app -b 0.0.0.0:$PORT"]
