@@ -18,7 +18,4 @@ COPY . .
 # Expón el puerto que usa tu aplicación
 EXPOSE 8000
 
-# Comando de Ejecución de Producción (Usando Gunicorn con Uvicorn workers)
-# -w 4:  Define 4 workers (ajusta según los recursos de tu plan en Railway)
-# api.main:app: Ejecuta la aplicación 'app' que se encuentra en api/main.py
-CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "api.main:app", "-b", "0.0.0.0:8000"]
+CMD ["sh", "-c", "gunicorn -w 4 -k uvicorn.workers.UvicornWorker api.main:app -b 0.0.0.0:$PORT"]
