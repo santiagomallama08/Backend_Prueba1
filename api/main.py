@@ -7,7 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 import logging
-import os # 👈 Importación requerida
 from pathlib import Path
 
 
@@ -27,14 +26,6 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-# ❗ RUTA DE ALMACENAMIENTO PERSISTENTE (Volume)
-# Obtiene la ruta del volumen de la variable de entorno de Railway.
-# Si no está definida (ej. desarrollo local), usa la ruta local por defecto.
-STORAGE_BASE_PATH = os.environ.get(
-    "STORAGE_BASE_PATH", 
-    Path("api/static/series").absolute() # Usar Path para la ruta local
-)
 
 # ============ Inicializar aplicación ============
 app = FastAPI(
@@ -67,23 +58,9 @@ app.add_middleware(
 
 
 # ============ Archivos estáticos ============
-
-# 1. Montar la ruta estática para la SERIE DE IMÁGENES usando el Volume
-# URL Pública: /static/series/* ->  Ruta Física: [STORAGE_BASE_PATH]/*
-Path(STORAGE_BASE_PATH).mkdir(parents=True, exist_ok=True) # Crear la carpeta si no existe en el volumen
-app.mount(
-    "/static/series", 
-    StaticFiles(directory=STORAGE_BASE_PATH), 
-    name="series_static"
-)
-logger.info(f"Ruta de Volúmenes (Storage Base Path): {STORAGE_BASE_PATH}")
-
-
-# 2. Montar otros archivos estáticos (ej: CSS, JS) si existen en api/static/ (ruta efímera)
-# Esto mantiene el comportamiento original de /static/
-# Nota: Si todos tus archivos estáticos están en la carpeta de la serie, puedes eliminar este bloque.
+static_path = Path("api/static")
+static_path.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="api/static"), name="static")
-logger.info(f"Ruta Estática Efímera (api/static): {Path('api/static').absolute()}")
 
 
 # ============ Rutas principales ============
@@ -118,7 +95,7 @@ app.include_router(reportes_router.router, tags=["Reportes"])
 async def startup():
     logger.info("=" * 50)
     logger.info("Iniciando DICOM API v1.1.0")
-    # logger.info(f"Static path: {static_path.absolute()}") # Se elimina, ya se loguea arriba
+    logger.info(f"Static path: {static_path.absolute()}")
     logger.info("=" * 50)
 
 
