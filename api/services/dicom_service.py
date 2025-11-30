@@ -36,16 +36,27 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
                 shutil.rmtree(output_dir)
                 raise ValueError("No se encontraron archivos DICOM en el ZIP.")
 
-            for idx, dicom_name in enumerate(dcm_files):
-                dicom_output_path = None # Inicializar para asegurar que exista en el finally o error
+            for idx, dicom_name_in_zip in enumerate(dcm_files):
+                dicom_output_path = None
 
                 try:
+                    # Normalizar el nombre de archivo, solo tomando el componente final
+                    # Esto evita que se creen subdirectorios si el ZIP tiene estructura anidada.
+                    safe_dicom_filename = os.path.basename(dicom_name_in_zip)
+                    
+                    if not safe_dicom_filename:
+                         continue # Saltar si el nombre es solo un directorio
+
                     # 1. Extracción y Guardado del DICOM
-                    with archive.open(dicom_name) as file:
+                    with archive.open(dicom_name_in_zip) as file:
                         dicom_bytes = file.read()
 
-                    dicom_output_path = os.path.join(output_dir, os.path.basename(dicom_name))
-                    os.makedirs(os.path.dirname(dicom_output_path), exist_ok=True)
+                    # --- CAMBIO A: Usar el nombre de archivo seguro ---
+                    dicom_output_path = os.path.join(output_dir, safe_dicom_filename)
+                    
+                    # No necesitamos os.makedirs(os.path.dirname(dicom_output_path), exist_ok=True)
+                    # a menos que output_dir sea variable, pero aquí es fijo por sesión.
+                    
                     with open(dicom_output_path, "wb") as f:
                         f.write(dicom_bytes)
 
@@ -53,27 +64,21 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
                     ds = pydicom.dcmread(io.BytesIO(dicom_bytes), force=True)
                     
                     if "PixelData" not in ds:
-                        print(f"⚠️ Archivo sin datos de imagen: {dicom_name}")
+                        print(f"⚠️ Archivo sin datos de imagen: {dicom_name_in_zip}")
                         os.remove(dicom_output_path)
                         continue
                     
-                    # 3. Procesamiento de Imagen (¡AQUÍ ESTÁ LA CORRECCIÓN!)
-                    # Todo el código que usa 'image' debe estar protegido por la validación PixelData.
-
+                    # 3. Procesamiento de Imagen (Corregido en el paso anterior)
                     image = ds.pixel_array.astype(np.float32)
 
-                    # Normaliza al rango [0, 1]
                     if np.max(image) > 1:
                         image = (image - np.min(image)) / (np.max(image) - np.min(image) + 1e-6)
 
-                    # Aplica CLAHE (ecualización adaptativa)
                     try:
                         image = exposure.equalize_adapthist(image)
                     except Exception:
-                        # Si falla, recorta valores
                         image = np.clip(image, 0, 1)
 
-                    # Convierte a 8 bits (0-255)
                     image = (image * 255).astype("uint8")
                     im = Image.fromarray(image).convert("L")
 
@@ -84,7 +89,7 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
 
                     # 5. Registrar archivo en la base de datos
                     archivo_id = get_or_create_archivo_dicom(
-                        nombrearchivo=os.path.basename(dicom_name),
+                        nombrearchivo=safe_dicom_filename,
                         rutaarchivo=dicom_output_path, 
                         sistemaid=1,
                         user_id=user_id,
@@ -92,20 +97,19 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
 
                     # 6. Agregar al mapping
                     dicom_mapping[png_filename] = {
-                        "dicom_name": os.path.basename(dicom_name),
+                        "dicom_name": safe_dicom_filename,
                         "archivodicomid": archivo_id,
                     }
 
                     image_paths.append(f"/static/series/{session_id}/{png_filename}")
 
                 except Exception as e:
-                    print(f"⚠️ Error procesando {dicom_name}: {e}")
-                    # Limpieza si falla después de guardar el DICOM
-                    if dicom_output_path and os.path.exists(dicom_output_path):
+                    print(f"⚠️ Error procesando {dicom_name_in_zip}: {e}")
+                    # --- CAMBIO B: Usar os.path.isfile() antes de intentar borrar ---
+                    if dicom_output_path and os.path.isfile(dicom_output_path):
                         os.remove(dicom_output_path)
                     continue
 
-        # Validar resultados y guardar mapping.json (sin cambios en esta parte)
         if not image_paths:
             shutil.rmtree(output_dir)
             raise ValueError("No se pudieron procesar archivos DICOM válidos.")
