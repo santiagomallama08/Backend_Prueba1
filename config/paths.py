@@ -1,66 +1,36 @@
 # config/paths.py
-
 from pathlib import Path
-import os
 
-"""
-Archivo centralizado para la definición de rutas persistentes.
-Este archivo **NO IMPORTA main.py**, para evitar ciclos.
+# ============================================================
+#      BASE PERSISTENTE DEL VOLUMEN MONTADO EN RAILWAY
+# ============================================================
 
-Todas las rutas aquí son usadas por:
-- dicom_service
-- segmentation_services (2D)
-- segmentation3d_service (3D)
-- modelos3d_service
-- reportes_service
-- historial_service
-"""
-
-# ===============================================================
-# 📌 1. Ruta base del volumen persistente en Railway
-# ===============================================================
-# En Railway, el volumen siempre se monta en:  /data
-# Tú montaste /data/static → aquí guardamos series, segmentaciones, reportes…
-# ===============================================================
-
+# Esta es SIEMPRE la raíz del volumen en Railway:
 BASE_STATIC_DIR = Path("/data/static")
 
-# Crear la carpeta si no existe
+# Crear carpeta si no existe (Railway siempre deja escribir aquí)
 BASE_STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
+# ============================================================
+#      RUTAS INTERNAS (subcarpetas dentro del volumen)
+# ============================================================
 
-# ===============================================================
-# 📌 2. Subcarpetas persistentes
-# ===============================================================
-
-# SERIES DICOM
+# /data/static/series
 SERIES_DIR = BASE_STATIC_DIR / "series"
 SERIES_DIR.mkdir(parents=True, exist_ok=True)
 
-# SEGMENTACIONES 2D
-SEGMENTATIONS_2D_DIR = BASE_STATIC_DIR / "segmentations"
+# /data/static/segmentations2d
+SEGMENTATIONS_2D_DIR = BASE_STATIC_DIR / "segmentations2d"
 SEGMENTATIONS_2D_DIR.mkdir(parents=True, exist_ok=True)
 
-# SEGMENTACIONES 3D (mask.npy + thumbs + stl temp)
+# /data/static/segmentations3d
 SEGMENTATIONS_3D_DIR = BASE_STATIC_DIR / "segmentations3d"
 SEGMENTATIONS_3D_DIR.mkdir(parents=True, exist_ok=True)
 
-# REPORTES PDF
-REPORTES_DIR = BASE_STATIC_DIR / "reportes"
-REPORTES_DIR.mkdir(parents=True, exist_ok=True)
-
-# MODELOS 3D (STL finales)
+# /data/static/modelos3d
 MODELOS3D_DIR = BASE_STATIC_DIR / "modelos3d"
 MODELOS3D_DIR.mkdir(parents=True, exist_ok=True)
 
-
-# ===============================================================
-# 📌 3. Debug opcional para verificar en Railway
-# ===============================================================
-print("🔥 [paths.py] Directorios configurados:")
-print(f"BASE_STATIC_DIR      → {BASE_STATIC_DIR}")
-print(f"SERIES_DIR           → {SERIES_DIR}")
-print(f"SEGMENTATIONS_2D_DIR → {SEGMENTATIONS_2D_DIR}")
-print(f"SEGMENTATIONS_3D_DIR → {SEGMENTATIONS_3D_DIR}")
-print(f"REPORTES_DIR         → {REPORTES_DIR}")
-print(f"MODELOS3D_DIR        → {MODELOS3D_DIR}")
+# /data/static/reportes
+REPORTES_DIR = BASE_STATIC_DIR / "reportes"
+REPORTES_DIR.mkdir(parents=True, exist_ok=True)
