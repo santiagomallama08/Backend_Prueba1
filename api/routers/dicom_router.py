@@ -1,129 +1,193 @@
-# api/routers/dicom_router.py
-
 import tempfile
-from fastapi import APIRouter, Form, HTTPException, UploadFile, File, Header, Query
-from fastapi.responses import JSONResponse
-from pathlib import Path
-import pydicom
+from typing import Optional
+import os
 import json
+from pathlib import Path
 
-from ..services.dicom_service import convert_dicom_zip_to_png_paths
-from ..services.segmentation_services import segmentar_dicom
+from fastapi import (
+    APIRouter, Form, HTTPException, Path as FPath, UploadFile, File, Header, Query
+)
+from fastapi.responses import JSONResponse
+import pydicom
+
 from ..services.segmentation3d_service import segmentar_serie_3d
+from ..services.dicom_service import convert_dicom_zip_to_png_paths
+
 
 router = APIRouter()
 
-# 🔥 Volumen real montado en Railway
-VOLUME_BASE = Path("/app/api/static/series")
+# --- 🎯 VARIABLE DE RUTA PERSISTENTE (Configura RAILWAY_STORAGE_PATH en Railway) ---
+# Si la variable de entorno no existe, se usará "api/static" como fallback.
+# Asegúrate de que RAILWAY_STORAGE_PATH sea la ruta de montaje del volumen en el contenedor (ej: /app/data).
+PERSISTENT_STORAGE_BASE = os.environ.get("RAILWAY_STORAGE_PATH", os.path.join("api", "static"))
+# ----------------------------------------------------------------------------------
 
 
-# -------------------------------------------------------
-# 1) SUBIR UN SOLO DICOM
-# -------------------------------------------------------
 @router.post("/upload-dicom")
 async def upload_dicom(file: UploadFile = File(...)):
+    """Procesa un solo archivo DICOM, guarda temporalmente, extrae metadatos y luego lo borra."""
     try:
-        with tempfile.NamedTemporaryFile(delete=True, suffix=file.filename) as tmp:
-            contents = await file.read()
-            tmp.write(contents)
+        # Guardar temporalmente el archivo (no usa el volumen persistente, se borra inmediatamente)
+        contents = await file.read()
+        # Usar tempfile.gettempdir() asegura una ruta temporal del sistema operativo
+        temp_path = os.path.join(tempfile.gettempdir(), f"temp_{file.filename}")
+        with open(temp_path, "wb") as f:
+            f.write(contents)
 
-            dicom = pydicom.dcmread(tmp.name)
+        # Leer el archivo con pydicom
+        dicom = pydicom.dcmread(temp_path)
 
-            metadata = {
-                "PatientID": dicom.get("PatientID", "N/A"),
-                "StudyDate": dicom.get("StudyDate", "N/A"),
-                "Modality": dicom.get("Modality", "N/A"),
-                "Rows": dicom.get("Rows", "N/A"),
-                "Columns": dicom.get("Columns", "N/A"),
+        # Extraer metadatos
+        metadata = {
+            "PatientID": dicom.get("PatientID", "N/A"),
+            "StudyDate": dicom.get("StudyDate", "N/A"),
+            "Modality": dicom.get("Modality", "N/A"),
+            "Rows": dicom.get("Rows", "N/A"),
+            "Columns": dicom.get("Columns", "N/A"),
+            "NumberOfFrames": dicom.get("NumberOfFrames", "1"),
+            "SOPInstanceUID": dicom.get("SOPInstanceUID", "N/A"),
+        }
+
+        # Borrar archivo temporal
+        os.remove(temp_path)
+
+        # Devolver metadatos
+        return JSONResponse(
+            content={
+                "message": "Archivo DICOM subido y procesado exitosamente.",
+                "metadata": metadata,
             }
-
-            return {"message": "DICOM leído correctamente", "metadata": metadata}
+        )
 
     except Exception as e:
-        raise HTTPException(500, f"Error leyendo DICOM: {e}")
+        # Aquí también podemos borrar el archivo temporal si existe
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            os.remove(temp_path)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
-# -------------------------------------------------------
-# 2) SUBIR ZIP CON LA SERIE COMPLETA
-# -------------------------------------------------------
 @router.post("/upload-dicom-series/")
 async def upload_dicom_series(
     file: UploadFile = File(...),
-    x_user_id: int = Header(..., alias="X-User-Id")
+    x_user_id: int = Header(..., alias="X-User-Id"),  
 ):
+    """Sube un archivo ZIP con una serie DICOM y llama al servicio para procesarla."""
     if not file.filename.endswith(".zip"):
-        raise HTTPException(400, "Debe subir un archivo .zip con DICOMs")
-
+        raise HTTPException(
+            status_code=400, detail="Debe subir un archivo .zip con archivos DICOM"
+        )
     try:
         zip_bytes = await file.read()
 
-        # ❗ NO PASAMOS base_dir porque tu función no lo acepta
-        result = convert_dicom_zip_to_png_paths(zip_bytes, x_user_id)
+        # convert_dicom_zip_to_png_paths ahora usará PERSISTENT_STORAGE_BASE
+        image_paths = convert_dicom_zip_to_png_paths(zip_bytes, user_id=x_user_id)
+        return JSONResponse(
+            content={
+                "message": f"{len(image_paths['image_series'])} imágenes convertidas correctamente.",
+                "image_series": image_paths['image_series'],
+                "session_id": image_paths['session_id'],
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-        return JSONResponse(result)
+
+@router.post("/segmentar-dicom/")
+async def segmentar_dicom_endpoint(file: UploadFile = File(...)):
+    """Segmenta un DICOM individual (usa tempfile para no escribir en el volumen)."""
+    try:
+        # Guardar DICOM temporalmente (usa tempfile, no afecta el volumen)
+        contents = await file.read()
+        temp_dir = tempfile.mkdtemp()
+        dicom_path = os.path.join(temp_dir, file.filename)
+
+        with open(dicom_path, "wb") as f:
+            f.write(contents)
+
+        # Llamar servicio
+        from ..services.segmentation_services import segmentar_dicom
+
+        resultado = segmentar_dicom(dicom_path)
+
+        return resultado
 
     except Exception as e:
-        raise HTTPException(500, str(e))
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        # Limpiar directorio temporal
+        if 'temp_dir' in locals() and os.path.isdir(temp_dir):
+             os.rmdir(temp_dir)
 
 
-# -------------------------------------------------------
-# 3) OBTENER MAPPING.JSON DESDE EL VOLUMEN
-# -------------------------------------------------------
 @router.get("/series-mapping/")
 def obtener_mapping_de_serie(
-    session_id: str = Query(..., description="ID de la serie")
+    session_id: str = Query(..., description="UUID de la serie cargada")
 ):
+    """Obtiene el archivo mapping.json de la ruta persistente."""
     try:
-        mapping_path = VOLUME_BASE / session_id / "mapping.json"
+        # --- 🎯 CAMBIO: Usa la ruta de almacenamiento persistente para LEER ---
+        mapping_path_str = os.path.join(PERSISTENT_STORAGE_BASE, "series", session_id, "mapping.json")
+        mapping_path = Path(mapping_path_str) # Convertir a Path para usar .exists()
+        
+        print(f"🛠 Buscando mapping en: {mapping_path}")
 
         if not mapping_path.exists():
-            raise HTTPException(404, f"mapping.json no existe: {mapping_path}")
+            return JSONResponse(
+                content={
+                    "error": f"No se encontró el archivo de mapeo en {mapping_path_str}"
+                },
+                status_code=404,
+            )
 
         with open(mapping_path, "r", encoding="utf-8") as f:
-            return {"mapping": json.load(f)}
+            data = json.load(f)
+            return {"mapping": data}
 
     except Exception as e:
-        raise HTTPException(500, str(e))
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
-# -------------------------------------------------------
-# 4) SEGMENTAR UNA IMAGEN INDIVIDUAL
-# -------------------------------------------------------
 @router.post("/segmentar-desde-mapping/")
 async def segmentar_desde_mapping(
     session_id: str = Form(...),
     image_name: str = Form(...),
-    x_user_id: int = Header(..., alias="X-User-Id")
+    x_user_id: int = Header(..., alias="X-User-Id"),  
 ):
+    """Segmenta un DICOM usando información y archivos cargados previamente desde la ruta persistente."""
     try:
-        serie_dir = VOLUME_BASE / session_id
-        mapping_path = serie_dir / "mapping.json"
-
-        if not mapping_path.exists():
-            raise HTTPException(404, "mapping.json no encontrado")
+        # --- 🎯 CAMBIO: Usa la ruta de almacenamiento persistente para LEER ---
+        base_dir = os.path.join(PERSISTENT_STORAGE_BASE, "series", session_id)
+        
+        mapping_path = os.path.join(base_dir, "mapping.json")
+        if not os.path.exists(mapping_path):
+            raise FileNotFoundError("No se encontró el archivo mapping.json")
 
         with open(mapping_path, "r") as f:
             mapping = json.load(f)
 
         if image_name not in mapping:
-            raise HTTPException(400, "La imagen no existe en el mapping")
+            raise ValueError(f"No se encontró {image_name} en el mapping")
 
-        dicom_filename = mapping[image_name]["dicom_name"]
-        archivodicomid = mapping[image_name]["archivodicomid"]
+        dicom_info = mapping[image_name]
+        dicom_filename = dicom_info["dicom_name"]
+        archivodicomid = dicom_info["archivodicomid"]
 
-        dicom_path = serie_dir / dicom_filename
+        # --- El dicom_path ahora apunta al archivo en el volumen persistente ---
+        dicom_path = os.path.join(base_dir, dicom_filename)
+        if not os.path.exists(dicom_path):
+            raise FileNotFoundError(
+                f"No se encontró el archivo DICOM: {dicom_filename}"
+            )
 
-        if not dicom_path.exists():
-            raise HTTPException(404, f"DICOM no encontrado: {dicom_filename}")
+        from ..services.segmentation_services import segmentar_dicom
 
-        return segmentar_dicom(str(dicom_path), archivodicomid=archivodicomid, user_id=x_user_id)
+        resultado = segmentar_dicom(
+            dicom_path, archivodicomid=archivodicomid, user_id=x_user_id
+        )
 
+        return resultado
     except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-# -------------------------------------------------------
-# 5) SEGMENTACIÓN 3D
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 # -------------------------------------------------------
 @router.post("/segmentar-serie-3d/")
 def segmentar_serie_3d_endpoint(
