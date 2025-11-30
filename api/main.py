@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 import logging
 from pathlib import Path
+from config.paths import BASE_STATIC_DIR, SERIES_DIR, REPORTES_DIR, MODELOS3D_DIR
 
 # Importar routers
 from api.routers import (
@@ -67,14 +68,10 @@ BASE_STATIC_DIR.mkdir(parents=True, exist_ok=True)
 # Montar /static -> /data/static
 app.mount("/static", StaticFiles(directory=BASE_STATIC_DIR), name="static")
 
-# Subcarpetas persistentes (para usar en los routers)
-SERIES_DIR = BASE_STATIC_DIR / "series"
-REPORTES_DIR = BASE_STATIC_DIR / "reportes"
-MODELOS3D_DIR = BASE_STATIC_DIR / "modelos3d"
 
-SERIES_DIR.mkdir(parents=True, exist_ok=True)
-REPORTES_DIR.mkdir(parents=True, exist_ok=True)
-MODELOS3D_DIR.mkdir(parents=True, exist_ok=True)
+
+
+
 
 logger.info(f" Directorio persistente BASE_STATIC_DIR: {BASE_STATIC_DIR}")
 logger.info(f" SERIES_DIR: {SERIES_DIR}")

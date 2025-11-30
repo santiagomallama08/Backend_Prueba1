@@ -12,9 +12,10 @@ from skimage.filters import threshold_otsu
 from skimage.morphology import binary_closing, ball
 from typing import Optional
 from scipy.ndimage import binary_fill_holes, median_filter
+from config.paths import SERIES_DIR, SEGMENTATIONS_3D_DIR
 
-# 🔥 Importar rutas persistentes desde main.py
-from api.main import SERIES_DIR, SEGMENTATIONS_3D_DIR
+
+
 
 
 # ========= Helpers de rutas corregidos =========
