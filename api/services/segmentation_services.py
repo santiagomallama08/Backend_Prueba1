@@ -7,8 +7,8 @@ from skimage.measure import regionprops
 
 from config.db_config import get_connection
 
-# 📌 Importar la carpeta persistente desde main.py
-from api.main import SEGMENTATIONS_2D_DIR   # /data/static/segmentations
+# 📌 Importar rutas persistentes SIN usar api.main
+from config.paths import SEGMENTATIONS_2D_DIR
 
 
 def segmentar_dicom(
@@ -24,7 +24,6 @@ def segmentar_dicom(
 
     # ========== 1) Determinar session_id a partir de la ruta ==========
     if session_id is None:
-        # extraer el session_id desde ruta tipo .../series/<session_id>/archivo.dcm
         parts = dicom_path.replace("\\", "/").split("/")
         if "series" in parts:
             idx = parts.index("series")
@@ -57,7 +56,7 @@ def segmentar_dicom(
 
         binaria = segmento.astype(np.uint8) * 255
 
-        # ========== 5) Guardar máscara en disco (persistente) ==========
+        # ========== 5) Guardar máscara persistente ==========
         base = os.path.splitext(os.path.basename(dicom_path))[0]
         rel_filename = f"{base}_mask.png"
         absolute_mask_path = output_dir / rel_filename
@@ -101,7 +100,7 @@ def segmentar_dicom(
         else:
             dimensiones = {"error": "No se detectó región válida."}
 
-        # ========== 7) Ruta pública (para frontend) ==========
+        # ========== 7) Ruta pública ==========
         public_mask_path = f"/static/segmentations/{session_id}/{rel_filename}"
 
         return {
@@ -150,10 +149,7 @@ def guardar_protesis_dimension(data: dict) -> bool:
 def get_or_create_archivo_dicom(
     nombrearchivo: str, rutaarchivo: str, sistemaid: int = 1, user_id: int = None
 ) -> int:
-    """
-    Busca un archivo DICOM por nombre y ruta. Si no existe, lo inserta.
-    Retorna el archivodicomid.
-    """
+
     conn = get_connection()
     cursor = conn.cursor()
 
