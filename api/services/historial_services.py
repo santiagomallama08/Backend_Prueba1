@@ -5,8 +5,8 @@ from typing import List, Dict
 from config.db_config import get_connection
 
 # Importamos las rutas persistentes
-from main import SERIES_DIR
-from main import BASE_STATIC_DIR  # para construir segmentations/
+from api.main import SERIES_DIR
+from api.main import BASE_STATIC_DIR  # para construir segmentations/
 
 # Directorio de máscaras
 SEGMENTATIONS_DIR = BASE_STATIC_DIR / "segmentations"

@@ -14,7 +14,7 @@ from typing import Optional
 from scipy.ndimage import binary_fill_holes, median_filter
 
 # 🔥 Importar rutas persistentes desde main.py
-from main import SERIES_DIR, SEGMENTATIONS_3D_DIR
+from api.main import SERIES_DIR, SEGMENTATIONS_3D_DIR
 
 
 # ========= Helpers de rutas corregidos =========

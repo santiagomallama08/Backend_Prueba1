@@ -8,7 +8,7 @@ from skimage.measure import regionprops
 from config.db_config import get_connection
 
 # 📌 Importar la carpeta persistente desde main.py
-from main import SEGMENTATIONS_2D_DIR   # /data/static/segmentations
+from api.main import SEGMENTATIONS_2D_DIR   # /data/static/segmentations
 
 
 def segmentar_dicom(

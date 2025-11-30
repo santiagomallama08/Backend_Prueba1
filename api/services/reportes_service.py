@@ -18,7 +18,7 @@ import os
 from config.db_config import get_connection
 
 # 📌 Importar carpeta persistente desde main.py
-from main import REPORTES_DIR   # /data/static/reportes
+from api.main import REPORTES_DIR   # /data/static/reportes
 
 
 def generar_reporte_estudio(session_id: str, user_id: int) -> str:

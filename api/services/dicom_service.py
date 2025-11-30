@@ -12,7 +12,7 @@ import numpy as np
 from .segmentation_services import get_or_create_archivo_dicom
 
 # Importar la ruta persistente del volumen
-from main import SERIES_DIR
+from api.main import SERIES_DIR
 
 
 def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
