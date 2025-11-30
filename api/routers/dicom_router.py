@@ -1,24 +1,41 @@
 # api/routers/dicom_router.py
 import tempfile
 from typing import Optional
+import json
 import uuid
 import zipfile
-from fastapi import APIRouter, Form, HTTPException, Path, UploadFile, File, Header
-from fastapi.responses import JSONResponse
 import os
 import numpy as np
 import pydicom
-from fastapi import Query
-import json
 from pathlib import Path
+from fastapi import (
+    APIRouter,
+    Form,
+    HTTPException,
+    UploadFile,
+    File,
+    Header,
+    Query
+)
+from fastapi.responses import JSONResponse
 
-# Importamos las rutas persistentes del volumen
-from main import SERIES_DIR
-
+# Importar servicios
 from ..services.segmentation3d_service import segmentar_serie_3d
 from ..services.dicom_service import convert_dicom_zip_to_png_paths
 
 router = APIRouter()
+
+# =============================================================
+# 🔥 DEFINICIÓN CORRECTA DE SERIES_DIR SIN IMPORTAR main.py
+# =============================================================
+
+BASE_DIR = Path(__file__).resolve().parents[2]  # /app
+STATIC_DIR = BASE_DIR / "api" / "static"
+SERIES_DIR = STATIC_DIR / "series"
+SEG3D_DIR = STATIC_DIR / "segmentations3d"
+
+os.makedirs(SERIES_DIR, exist_ok=True)
+os.makedirs(SEG3D_DIR, exist_ok=True)
 
 
 # =============================================================
@@ -29,7 +46,6 @@ async def upload_dicom(file: UploadFile = File(...)):
     try:
         contents = await file.read()
 
-        # Guardar archivo temporal SOLO para leer metadatos
         temp_dir = tempfile.mkdtemp()
         temp_path = os.path.join(temp_dir, file.filename)
 
@@ -48,16 +64,13 @@ async def upload_dicom(file: UploadFile = File(...)):
             "SOPInstanceUID": dicom.get("SOPInstanceUID", "N/A"),
         }
 
-        return JSONResponse(
-            content={
-                "message": "Archivo DICOM subido y procesado exitosamente.",
-                "metadata": metadata,
-            }
-        )
+        return {
+            "message": "Archivo DICOM subido y procesado correctamente",
+            "metadata": metadata,
+        }
 
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # =============================================================
@@ -69,29 +82,24 @@ async def upload_dicom_series(
     x_user_id: int = Header(..., alias="X-User-Id"),
 ):
     if not file.filename.endswith(".zip"):
-        raise HTTPException(
-            status_code=400,
-            detail="Debe subir un archivo .zip con archivos DICOM",
-        )
+        raise HTTPException(400, "Debe subir un archivo .zip con DICOMs")
+
     try:
         zip_bytes = await file.read()
 
-        # convert_dicom_zip_to_png_paths ya debe usar SERIES_DIR internamente
         image_paths = convert_dicom_zip_to_png_paths(zip_bytes, user_id=x_user_id)
 
-        return JSONResponse(
-            content={
-                "message": f"{len(image_paths)} imágenes convertidas correctamente.",
-                "image_series": image_paths,
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {
+            "message": f"{len(image_paths)} imágenes convertidas correctamente.",
+            "image_series": image_paths,
+        }
 
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 # =============================================================
-# 3) OBTENER MAPPING
+# 3) OBTENER MAPPING DE UNA SERIE
 # =============================================================
 @router.get("/series-mapping/")
 def obtener_mapping_de_serie(
@@ -102,8 +110,7 @@ def obtener_mapping_de_serie(
 
         if not mapping_path.exists():
             return JSONResponse(
-                content={"error": f"No se encontró el mapeo en {mapping_path}"},
-                status_code=404,
+                {"error": f"No se encontró el mapeo: {mapping_path}"}, status_code=404
             )
 
         with open(mapping_path, "r", encoding="utf-8") as f:
@@ -112,12 +119,11 @@ def obtener_mapping_de_serie(
         return {"mapping": data}
 
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # =============================================================
-# 4) SEGMENTAR UNA IMAGEN SEGÚN MAPPING
+# 4) SEGMENTAR DESDE MAPPING (2D)
 # =============================================================
 @router.post("/segmentar-desde-mapping/")
 async def segmentar_desde_mapping(
@@ -136,7 +142,7 @@ async def segmentar_desde_mapping(
             mapping = json.load(f)
 
         if image_name not in mapping:
-            raise ValueError(f"No se encontró {image_name} en el mapping")
+            raise ValueError(f"{image_name} no está en mapping")
 
         dicom_name = mapping[image_name]["dicom_name"]
         archivodicomid = mapping[image_name]["archivodicomid"]
@@ -144,21 +150,20 @@ async def segmentar_desde_mapping(
         dicom_path = series_path / dicom_name
 
         if not dicom_path.exists():
-            raise FileNotFoundError(
-                f"No se encontró el archivo DICOM: {dicom_name}"
-            )
+            raise FileNotFoundError(f"DICOM no encontrado: {dicom_name}")
 
         from ..services.segmentation_services import segmentar_dicom
 
         resultado = segmentar_dicom(
-            str(dicom_path), archivodicomid=archivodicomid, user_id=x_user_id
+            str(dicom_path),
+            archivodicomid=archivodicomid,
+            user_id=x_user_id
         )
 
         return resultado
 
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # =============================================================
@@ -176,7 +181,7 @@ def segmentar_serie_3d_endpoint(
 ):
     try:
         result = segmentar_serie_3d(
-            session_id,
+            session_id=session_id,
             user_id=x_user_id,
             preset=preset,
             thr_min=thr_min,
@@ -184,7 +189,8 @@ def segmentar_serie_3d_endpoint(
             min_size_voxels=min_size_voxels,
             close_radius_mm=close_radius_mm,
         )
+
         return result
 
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        return JSONResponse({"error": str(e)}, status_code=500)
