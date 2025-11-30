@@ -1,13 +1,20 @@
-# api/services/historial_services.py
 import os
 import re
 import shutil
 from typing import List, Dict
 from config.db_config import get_connection
 
+# Importamos las rutas persistentes
+from main import SERIES_DIR
+from main import BASE_STATIC_DIR  # para construir segmentations/
+
+# Directorio de máscaras
+SEGMENTATIONS_DIR = BASE_STATIC_DIR / "segmentations"
+SEGMENTATIONS_DIR.mkdir(exist_ok=True)
+
 
 def extraer_session_id(ruta: str) -> str:
-    """Extrae el session_id desde la ruta del archivo usando regex."""
+    """Extrae el session_id de rutas tipo /data/static/series/<session_id>/"""
     match = re.search(r"series[\\/](.*?)[\\/]", ruta)
     return match.group(1) if match else None
 
@@ -15,7 +22,7 @@ def extraer_session_id(ruta: str) -> str:
 def contar_segmentaciones_por_session(conn, session_id: str, user_id: int) -> int:
     cur = conn.cursor()
 
-    # Segmentaciones 2D (filtradas por usuario)
+    # Segmentaciones 2D
     cur.execute(
         """
         SELECT COUNT(*)
@@ -28,7 +35,7 @@ def contar_segmentaciones_por_session(conn, session_id: str, user_id: int) -> in
     )
     count_2d = cur.fetchone()[0]
 
-    # Segmentaciones 3D (filtradas por usuario)
+    # Segmentaciones 3D
     cur.execute(
         """
         SELECT COUNT(*)
@@ -45,17 +52,19 @@ def contar_segmentaciones_por_session(conn, session_id: str, user_id: int) -> in
 
 
 def obtener_historial_archivos(user_id: int) -> List[Dict]:
-    """Obtiene las series únicas de DICOM registradas en la base de datos."""
+    """Lista las series guardadas en archivodicom y en el volumen."""
     conn = get_connection()
     cursor = conn.cursor()
 
-    query = """
+    cursor.execute(
+        """
         SELECT archivodicomid, nombrearchivo, rutaarchivo, fechacarga, sistemaid
         FROM archivodicom
         WHERE user_id = %s
         ORDER BY fechacarga DESC
-    """
-    cursor.execute(query, (user_id,))
+        """,
+        (user_id,),
+    )
     rows = cursor.fetchall()
 
     series_dict = {}
@@ -64,6 +73,7 @@ def obtener_historial_archivos(user_id: int) -> List[Dict]:
         ruta_relativa = row[2]
         ruta_absoluta = os.path.abspath(ruta_relativa)
 
+        # Cambiamos verificación al volumen persistente
         if not os.path.exists(ruta_absoluta):
             continue
 
@@ -71,14 +81,13 @@ def obtener_historial_archivos(user_id: int) -> List[Dict]:
         if not session_id:
             continue
 
-        # Solo guardar una entrada por session_id
         if session_id not in series_dict:
             seg_count = contar_segmentaciones_por_session(conn, session_id, user_id)
 
             series_dict[session_id] = {
                 "archivodicomid": row[0],
-                "nombrearchivo": session_id,  # se muestra el session_id como nombre visible
-                "rutaarchivo": row[2],
+                "nombrearchivo": session_id,
+                "rutaarchivo": ruta_relativa,
                 "fechacarga": row[3],
                 "sistemaid": row[4],
                 "session_id": session_id,
@@ -92,33 +101,32 @@ def obtener_historial_archivos(user_id: int) -> List[Dict]:
 
 
 def eliminar_serie_por_session_id(session_id: str, user_id: int) -> None:
-    """Elimina una serie completa: registros DICOM, imágenes y segmentaciones."""
+    """Elimina una serie completa de /data/static."""
     conn = get_connection()
     cursor = conn.cursor()
 
-    # ❗ Bloqueo si hay segmentaciones
     seg_count = contar_segmentaciones_por_session(conn, session_id, user_id)
     if seg_count > 0:
         cursor.close()
         conn.close()
         raise ValueError("SERIE_CON_SEGMENTACIONES")
 
-    # 1. Eliminar registros de la base de datos SOLO del usuario
+    # 1. Eliminar registros DB
     cursor.execute(
         "DELETE FROM archivodicom WHERE rutaarchivo LIKE %s AND user_id = %s",
         [f"%{session_id}%", user_id],
     )
     conn.commit()
 
-    # 2. Eliminar la carpeta de imágenes y mapping
-    ruta_series = os.path.abspath(f"api/static/series/{session_id}")
-    if os.path.isdir(ruta_series):
+    # 2. Eliminar carpeta de series
+    ruta_series = SERIES_DIR / session_id
+    if ruta_series.is_dir():
         shutil.rmtree(ruta_series)
 
-    # 3. Eliminar segmentaciones asociadas (si existen en disco)
-    ruta_segmentaciones = os.path.abspath(f"api/static/segmentations/{session_id}")
-    if os.path.isdir(ruta_segmentaciones):
-        shutil.rmtree(ruta_segmentaciones)
+    # 3. Eliminar máscaras 2D
+    ruta_masks = SEGMENTATIONS_DIR / session_id
+    if ruta_masks.is_dir():
+        shutil.rmtree(ruta_masks)
 
     cursor.close()
     conn.close()
@@ -129,12 +137,7 @@ def _basename_sin_ext(ruta: str) -> str:
 
 
 def listar_segmentaciones_por_session_id(session_id: str, user_id: int) -> List[Dict]:
-    """
-    Lista segmentaciones (ProtesisDimension) asociadas a los DICOM cuya ruta contenga el session_id.
-    Devuelve métricas + archivodicomid + (si existe) la ruta pública de la máscara.
-    Busca máscaras en api/static/segmentations (sin subcarpetas por session).
-    Filtrado por user_id para aislar datos por usuario.
-    """
+    """Lista segmentaciones 2D + máscara si existe."""
     conn = get_connection()
     cur = conn.cursor()
 
@@ -149,7 +152,7 @@ def listar_segmentaciones_por_session_id(session_id: str, user_id: int) -> List[
           AND ad.user_id = %s
           AND pd.user_id = %s
         ORDER BY pd.archivodicomid
-    """,
+        """,
         [f"%{session_id}%", user_id, user_id],
     )
 
@@ -158,7 +161,6 @@ def listar_segmentaciones_por_session_id(session_id: str, user_id: int) -> List[
     conn.close()
 
     resultados = []
-    segment_dir_abs = os.path.abspath("api/static/segmentations")
 
     for (
         archivodicomid,
@@ -170,10 +172,14 @@ def listar_segmentaciones_por_session_id(session_id: str, user_id: int) -> List[
         unidad,
         ruta_dicom,
     ) in rows:
-        base = _basename_sin_ext(ruta_dicom)  # p.ej. "image-00003"
+
+        base = _basename_sin_ext(ruta_dicom)
         mask_filename = f"{base}_mask.png"
-        mask_abs = os.path.join(segment_dir_abs, mask_filename)
-        if os.path.isfile(mask_abs):
+
+        # NUEVA ruta absoluta a máscaras
+        mask_abs = SEGMENTATIONS_DIR / mask_filename
+
+        if mask_abs.is_file():
             mask_public = f"/static/segmentations/{mask_filename}"
         else:
             mask_public = None
@@ -194,25 +200,18 @@ def listar_segmentaciones_por_session_id(session_id: str, user_id: int) -> List[
     return resultados
 
 
-def eliminar_segmentacion_por_archivo(
-    session_id: str, archivodicomid: int, user_id: int
-) -> bool:
-    """
-    Elimina la segmentación (fila en ProtesisDimension) para un archivodicomid
-    y borra la máscara en disco si existe. Las máscaras están en api/static/segmentations/
-    Valida que la segmentación y el dicom pertenezcan al usuario y a la serie.
-    """
+def eliminar_segmentacion_por_archivo(session_id: str, archivodicomid: int, user_id: int) -> bool:
+    """Elimina una segmentación 2D real y su máscara."""
     conn = get_connection()
     cur = conn.cursor()
     try:
-        # Validar pertenencia del DICOM a user y a session
         cur.execute(
             """
             SELECT rutaarchivo FROM archivodicom
             WHERE archivodicomid = %s
               AND user_id = %s
               AND rutaarchivo LIKE %s
-        """,
+            """,
             [archivodicomid, user_id, f"%{session_id}%"],
         )
         row = cur.fetchone()
@@ -224,23 +223,24 @@ def eliminar_segmentacion_por_archivo(
         ruta_dicom = row[0]
         base = _basename_sin_ext(ruta_dicom)
         mask_filename = f"{base}_mask.png"
-        mask_abs = os.path.abspath(f"api/static/segmentations/{mask_filename}")
 
-        # Borrar fila en ProtesisDimension SOLO del usuario
+        mask_abs = SEGMENTATIONS_DIR / mask_filename
+
+        # 1. Eliminar registro
         cur.execute(
             """
             DELETE FROM protesisdimension
             WHERE archivodicomid = %s
               AND user_id = %s
-        """,
+            """,
             [archivodicomid, user_id],
         )
         conn.commit()
 
-        # Intentar borrar archivo (si existe)
-        if os.path.isfile(mask_abs):
+        # 2. Eliminar archivo máscara
+        if mask_abs.is_file():
             try:
-                os.remove(mask_abs)
+                mask_abs.unlink()
             except Exception:
                 pass
 

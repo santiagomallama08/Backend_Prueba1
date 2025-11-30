@@ -1,35 +1,51 @@
-# api/services/segmentation_services.py
 import datetime
 import os
 import numpy as np
 import pydicom
 from skimage import measure, morphology, io
 from skimage.measure import regionprops
-from uuid import uuid4
 
 from config.db_config import get_connection
 
+# 📌 Importar la carpeta persistente desde main.py
+from main import SEGMENTATIONS_2D_DIR   # /data/static/segmentations
+
 
 def segmentar_dicom(
-    dicom_path: str, archivodicomid: int, user_id: int, output_dir: str = None
+    dicom_path: str,
+    archivodicomid: int,
+    user_id: int,
+    session_id: str = None
 ) -> dict:
+    """
+    Segmentación 2D sobre un archivo DICOM individual.
+    Guarda la máscara en /data/static/segmentations/<session_id>/
+    """
 
-    # 1) Definir output_dir absoluto apuntando a api/static/segmentations
-    if output_dir is None:
-        output_dir = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "static", "segmentations")
-        )
+    # ========== 1) Determinar session_id a partir de la ruta ==========
+    if session_id is None:
+        # extraer el session_id desde ruta tipo .../series/<session_id>/archivo.dcm
+        parts = dicom_path.replace("\\", "/").split("/")
+        if "series" in parts:
+            idx = parts.index("series")
+            session_id = parts[idx + 1]
+        else:
+            session_id = "default"
+
+    # ========== 2) Carpeta persistente para almacenar la máscara ==========
+    output_dir = SEGMENTATIONS_2D_DIR / session_id
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # 2) Asegurarse de que exista
-        os.makedirs(output_dir, exist_ok=True)
-
-        # 3) Leer DICOM y segmentar...
+        # ========== 3) Leer el DICOM ==========
         ds = pydicom.dcmread(dicom_path)
         imagen = ds.pixel_array.astype(np.int16)
+
+        # ========== 4) Segmentación ==========
         umbral = 400
         mascara = imagen > umbral
         mascara = morphology.remove_small_objects(mascara, min_size=500)
+
         etiquetas = measure.label(mascara)
         props = regionprops(etiquetas)
 
@@ -41,13 +57,14 @@ def segmentar_dicom(
 
         binaria = segmento.astype(np.uint8) * 255
 
-        # 4) Guardar máscara en disco
+        # ========== 5) Guardar máscara en disco (persistente) ==========
         base = os.path.splitext(os.path.basename(dicom_path))[0]
         rel_filename = f"{base}_mask.png"
-        absolute_mask_path = os.path.join(output_dir, rel_filename)
-        io.imsave(absolute_mask_path, binaria)
+        absolute_mask_path = output_dir / rel_filename
 
-        # 5) Calcular dimensiones
+        io.imsave(str(absolute_mask_path), binaria)
+
+        # ========== 6) Calcular medidas ==========
         px_y, px_x = ds.PixelSpacing
         slice_thk = getattr(ds, "SliceThickness", 1.0)
 
@@ -68,7 +85,7 @@ def segmentar_dicom(
                 "Volumen (mm³)": round(area_px * px_x * px_y * slice_thk, 2),
             }
 
-            # Guardar en base de datos
+            # Guardar en BD
             datos_bd = {
                 "archivodicomid": archivodicomid,
                 "altura": dimensiones["Altura (mm)"],
@@ -77,14 +94,15 @@ def segmentar_dicom(
                 "ancho": dimensiones["Ancho (mm)"],
                 "tipoprotesis": "Cráneo",
                 "unidad": "mm³",
-                "user_id": user_id,  
+                "user_id": user_id,
             }
             guardar_protesis_dimension(datos_bd)
+
         else:
             dimensiones = {"error": "No se detectó región válida."}
 
-        # 6) Construir y devolver la ruta pública relativa (para frontend)
-        public_mask_path = f"/static/segmentations/{rel_filename}"
+        # ========== 7) Ruta pública (para frontend) ==========
+        public_mask_path = f"/static/segmentations/{session_id}/{rel_filename}"
 
         return {
             "mensaje": "Segmentación exitosa",
@@ -106,7 +124,7 @@ def guardar_protesis_dimension(data: dict) -> bool:
             INSERT INTO ProtesisDimension
               (archivodicomid, altura, volumen, longitud, ancho, tipoprotesis, unidad, user_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """,
+            """,
             (
                 int(data["archivodicomid"]),
                 float(data["altura"]),
@@ -115,7 +133,7 @@ def guardar_protesis_dimension(data: dict) -> bool:
                 float(data["ancho"]),
                 str(data["tipoprotesis"]),
                 str(data["unidad"]),
-                int(data["user_id"]),  
+                int(data["user_id"]),
             ),
         )
 
@@ -123,6 +141,7 @@ def guardar_protesis_dimension(data: dict) -> bool:
         cursor.close()
         conn.close()
         return True
+
     except Exception as e:
         print("❌ Error al guardar dimensiones:", e)
         return False
@@ -138,12 +157,11 @@ def get_or_create_archivo_dicom(
     conn = get_connection()
     cursor = conn.cursor()
 
-    
     cursor.execute(
         """
         SELECT archivodicomid FROM ArchivoDicom
         WHERE nombrearchivo = %s AND rutaarchivo = %s AND user_id = %s
-    """,
+        """,
         (nombrearchivo, rutaarchivo, user_id),
     )
     resultado = cursor.fetchone()
@@ -156,7 +174,7 @@ def get_or_create_archivo_dicom(
             INSERT INTO ArchivoDicom (fechacarga, sistemaid, nombrearchivo, rutaarchivo, user_id)
             VALUES (%s, %s, %s, %s, %s)
             RETURNING archivodicomid
-        """,
+            """,
             (datetime.date.today(), sistemaid, nombrearchivo, rutaarchivo, user_id),
         )
         archivo_id = cursor.fetchone()[0]

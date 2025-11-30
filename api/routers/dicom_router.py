@@ -1,6 +1,5 @@
 # api/routers/dicom_router.py
 import tempfile
-from tkinter import Image
 from typing import Optional
 import uuid
 import zipfile
@@ -12,27 +11,33 @@ import pydicom
 from fastapi import Query
 import json
 from pathlib import Path
+
+# Importamos las rutas persistentes del volumen
+from main import SERIES_DIR
+
 from ..services.segmentation3d_service import segmentar_serie_3d
-
-
 from ..services.dicom_service import convert_dicom_zip_to_png_paths
 
 router = APIRouter()
 
 
+# =============================================================
+# 1) SUBIR DICOM SUELTO
+# =============================================================
 @router.post("/upload-dicom")
 async def upload_dicom(file: UploadFile = File(...)):
     try:
-        # Guardar temporalmente el archivo
         contents = await file.read()
-        temp_path = f"temp_{file.filename}"
+
+        # Guardar archivo temporal SOLO para leer metadatos
+        temp_dir = tempfile.mkdtemp()
+        temp_path = os.path.join(temp_dir, file.filename)
+
         with open(temp_path, "wb") as f:
             f.write(contents)
 
-        # Leer el archivo con pydicom
         dicom = pydicom.dcmread(temp_path)
 
-        # Extraer metadatos
         metadata = {
             "PatientID": dicom.get("PatientID", "N/A"),
             "StudyDate": dicom.get("StudyDate", "N/A"),
@@ -43,10 +48,6 @@ async def upload_dicom(file: UploadFile = File(...)):
             "SOPInstanceUID": dicom.get("SOPInstanceUID", "N/A"),
         }
 
-        # Borrar archivo temporal
-        os.remove(temp_path)
-
-        # Devolver metadatos
         return JSONResponse(
             content={
                 "message": "Archivo DICOM subido y procesado exitosamente.",
@@ -58,19 +59,26 @@ async def upload_dicom(file: UploadFile = File(...)):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
+
+# =============================================================
+# 2) SUBIR ZIP DE SERIE DICOM
+# =============================================================
 @router.post("/upload-dicom-series/")
 async def upload_dicom_series(
     file: UploadFile = File(...),
-    x_user_id: int = Header(..., alias="X-User-Id"),  
+    x_user_id: int = Header(..., alias="X-User-Id"),
 ):
     if not file.filename.endswith(".zip"):
         raise HTTPException(
-            status_code=400, detail="Debe subir un archivo .zip con archivos DICOM"
+            status_code=400,
+            detail="Debe subir un archivo .zip con archivos DICOM",
         )
     try:
         zip_bytes = await file.read()
 
+        # convert_dicom_zip_to_png_paths ya debe usar SERIES_DIR internamente
         image_paths = convert_dicom_zip_to_png_paths(zip_bytes, user_id=x_user_id)
+
         return JSONResponse(
             content={
                 "message": f"{len(image_paths)} imágenes convertidas correctamente.",
@@ -81,65 +89,48 @@ async def upload_dicom_series(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/segmentar-dicom/")
-async def segmentar_dicom_endpoint(file: UploadFile = File(...)):
-    try:
-        # Guardar DICOM temporalmente
-        contents = await file.read()
-        temp_dir = tempfile.mkdtemp()
-        dicom_path = os.path.join(temp_dir, file.filename)
 
-        with open(dicom_path, "wb") as f:
-            f.write(contents)
-
-        # Llamar servicio
-        from ..services.segmentation_services import segmentar_dicom
-
-        resultado = segmentar_dicom(dicom_path)
-
-        return resultado
-
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
+# =============================================================
+# 3) OBTENER MAPPING
+# =============================================================
 @router.get("/series-mapping/")
 def obtener_mapping_de_serie(
-    session_id: str = Query(..., description="UUID de la serie cargada")
+    session_id: str = Query(..., description="UUID de la serie cargada"),
 ):
     try:
-        # BASE_DIR apunta a /api
-        BASE_DIR = Path(__file__).resolve().parent.parent
-        mapping_path = BASE_DIR / "static" / "series" / session_id / "mapping.json"
-        print(f"🛠 Buscando mapping en: {mapping_path}")
+        mapping_path = SERIES_DIR / session_id / "mapping.json"
 
         if not mapping_path.exists():
             return JSONResponse(
-                content={
-                    "error": f"No se encontró el archivo de mapeo en {mapping_path}"
-                },
+                content={"error": f"No se encontró el mapeo en {mapping_path}"},
                 status_code=404,
             )
 
         with open(mapping_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            return {"mapping": data}
+
+        return {"mapping": data}
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
+
+# =============================================================
+# 4) SEGMENTAR UNA IMAGEN SEGÚN MAPPING
+# =============================================================
 @router.post("/segmentar-desde-mapping/")
 async def segmentar_desde_mapping(
     session_id: str = Form(...),
     image_name: str = Form(...),
-    x_user_id: int = Header(..., alias="X-User-Id"),  
+    x_user_id: int = Header(..., alias="X-User-Id"),
 ):
     try:
-        base_dir = os.path.join("api", "static", "series", session_id)
-        mapping_path = os.path.join(base_dir, "mapping.json")
-        if not os.path.exists(mapping_path):
-            raise FileNotFoundError("No se encontró el archivo mapping.json")
+        series_path = SERIES_DIR / session_id
+        mapping_path = series_path / "mapping.json"
+
+        if not mapping_path.exists():
+            raise FileNotFoundError("mapping.json no encontrado")
 
         with open(mapping_path, "r") as f:
             mapping = json.load(f)
@@ -147,28 +138,32 @@ async def segmentar_desde_mapping(
         if image_name not in mapping:
             raise ValueError(f"No se encontró {image_name} en el mapping")
 
-        dicom_info = mapping[image_name]
-        dicom_filename = dicom_info["dicom_name"]
-        archivodicomid = dicom_info["archivodicomid"]
+        dicom_name = mapping[image_name]["dicom_name"]
+        archivodicomid = mapping[image_name]["archivodicomid"]
 
-        dicom_path = os.path.join(base_dir, dicom_filename)
-        if not os.path.exists(dicom_path):
+        dicom_path = series_path / dicom_name
+
+        if not dicom_path.exists():
             raise FileNotFoundError(
-                f"No se encontró el archivo DICOM: {dicom_filename}"
+                f"No se encontró el archivo DICOM: {dicom_name}"
             )
 
-  
         from ..services.segmentation_services import segmentar_dicom
 
         resultado = segmentar_dicom(
-            dicom_path, archivodicomid=archivodicomid, user_id=x_user_id
+            str(dicom_path), archivodicomid=archivodicomid, user_id=x_user_id
         )
 
         return resultado
+
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
+
+# =============================================================
+# 5) SEGMENTACIÓN 3D COMPLETA
+# =============================================================
 @router.post("/segmentar-serie-3d/")
 def segmentar_serie_3d_endpoint(
     session_id: str = Form(...),
@@ -190,5 +185,6 @@ def segmentar_serie_3d_endpoint(
             close_radius_mm=close_radius_mm,
         )
         return result
+
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)

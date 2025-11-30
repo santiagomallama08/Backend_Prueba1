@@ -9,7 +9,6 @@ from fastapi.responses import JSONResponse
 import logging
 from pathlib import Path
 
-
 # Importar routers
 from api.routers import (
     login_router,
@@ -18,12 +17,12 @@ from api.routers import (
     modelos3d_router,
     pacientes_router,
     reportes_router,
-    
 )
 
 # ============ Configuración de logging ============
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -34,8 +33,7 @@ app = FastAPI(
     description="API para procesamiento de imágenes médicas DICOM",
 )
 
-
-# ============ Middleware de errores ============
+# ============ Manejo global de errores ============
 @app.middleware("http")
 async def error_handler(request: Request, call_next):
     try:
@@ -47,21 +45,43 @@ async def error_handler(request: Request, call_next):
             content={"error": "Error interno del servidor", "detail": str(exc)},
         )
 
-
+# ============ CORS ============
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Ajusta si usas dominios específicos
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ============================================================
+#                ARCHIVOS ESTÁTICOS (PERSISTENTES)
+# ============================================================
 
-# ============ Archivos estáticos ============
-static_path = Path("api/static")
-static_path.mkdir(parents=True, exist_ok=True)
-app.mount("/static", StaticFiles(directory="api/static"), name="static")
+# Ruta del volumen persistente montado en Railway
+BASE_STATIC_DIR = Path("/data/static")
 
+# Crear el directorio si no existe (persistente)
+BASE_STATIC_DIR.mkdir(parents=True, exist_ok=True)
+
+# Montar /static -> /data/static
+app.mount("/static", StaticFiles(directory=BASE_STATIC_DIR), name="static")
+
+# Subcarpetas persistentes (para usar en los routers)
+SERIES_DIR = BASE_STATIC_DIR / "series"
+REPORTES_DIR = BASE_STATIC_DIR / "reportes"
+MODELOS3D_DIR = BASE_STATIC_DIR / "modelos3d"
+
+SERIES_DIR.mkdir(parents=True, exist_ok=True)
+REPORTES_DIR.mkdir(parents=True, exist_ok=True)
+MODELOS3D_DIR.mkdir(parents=True, exist_ok=True)
+
+logger.info(f" Directorio persistente BASE_STATIC_DIR: {BASE_STATIC_DIR}")
+logger.info(f" SERIES_DIR: {SERIES_DIR}")
+logger.info(f" REPORTES_DIR: {REPORTES_DIR}")
+logger.info(f" MODELOS3D_DIR: {MODELOS3D_DIR}")
+
+# ============================================================
 
 # ============ Rutas principales ============
 @app.get("/")
@@ -72,14 +92,13 @@ def root():
         "version": "1.1.0",
     }
 
-
 @app.get("/health")
 def health():
     return {
         "status": "healthy",
         "modules": ["auth", "dicom", "historial", "modelos3d", "pacientes"],
+        "static_path": str(BASE_STATIC_DIR),
     }
-
 
 # ============ Incluir routers ============
 app.include_router(login_router.router, tags=["Auth"])
@@ -89,15 +108,13 @@ app.include_router(modelos3d_router.router, tags=["Modelos3D"])
 app.include_router(pacientes_router.router, tags=["Pacientes"])
 app.include_router(reportes_router.router, tags=["Reportes"])
 
-
 # ============ Eventos ============
 @app.on_event("startup")
 async def startup():
-    logger.info("=" * 50)
+    logger.info("=" * 60)
     logger.info("Iniciando DICOM API v1.1.0")
-    logger.info(f"Static path: {static_path.absolute()}")
-    logger.info("=" * 50)
-
+    logger.info(f"Static path persistente: {BASE_STATIC_DIR.absolute()}")
+    logger.info("=" * 60)
 
 @app.on_event("shutdown")
 async def shutdown():
