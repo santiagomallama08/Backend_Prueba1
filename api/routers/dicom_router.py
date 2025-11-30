@@ -58,20 +58,22 @@ async def upload_dicom_series(
     x_user_id: int = Header(..., alias="X-User-Id"),
 ):
     if not file.filename.endswith(".zip"):
-        raise HTTPException(
-            status_code=400, detail="Debe subir un archivo .zip con archivos DICOM"
-        )
+        raise HTTPException(status_code=400, detail="Debe subir un archivo .zip con archivos DICOM")
+
     try:
         zip_bytes = await file.read()
 
-        # ⬇️ NO LE PASAMOS base_output_dir, tu función NO LO SOPORTA
-        # La función ya guarda en api/static/series/, y ese path YA ES EL VOLUMEN.
-        result = convert_dicom_zip_to_png_paths(zip_bytes, user_id=x_user_id)
+        result = convert_dicom_zip_to_png_paths(
+            zip_bytes,
+            user_id=x_user_id,
+            base_output_dir="/app/api/static/series"   # VOLUMEN REAL
+        )
 
         return JSONResponse(content=result)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @router.post("/segmentar-dicom/")

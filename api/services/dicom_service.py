@@ -1,42 +1,47 @@
-# api/services/dicom_service.py
 import json
 import os
 import io
 import uuid
 import zipfile
-from skimage import exposure
-import pydicom
-from PIL import Image
 import numpy as np
+from skimage import exposure
+from PIL import Image
+import pydicom
 
 from .segmentation_services import get_or_create_archivo_dicom
 
-# 🔥 Ruta real del volumen montado en Railway
-VOLUME_BASE = "/app/api/static/series"
 
+def convert_dicom_zip_to_png_paths(
+    zip_file: bytes,
+    user_id: int,
+    base_output_dir: str | os.PathLike = "api/static/series"
+) -> dict:
+    """
+    Convierte un ZIP con DICOM y genera imágenes + mapping.json dentro del volumen.
+    """
 
-def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
-    """
-    Convierte un archivo ZIP con múltiples DICOMs en imágenes PNG y genera mapping.json
-    """
+    # Crear carpeta única por sesión dentro del volumen
     session_id = str(uuid.uuid4())
-    output_dir = os.path.join(VOLUME_BASE, session_id)
+    output_dir = os.path.join(base_output_dir, session_id)
     os.makedirs(output_dir, exist_ok=True)
 
     dicom_mapping = {}
     image_paths = []
 
     with zipfile.ZipFile(io.BytesIO(zip_file)) as archive:
+
         dcm_files = [f for f in archive.namelist() if f.lower().endswith((".dcm", ""))]
         if not dcm_files:
             raise ValueError("No se encontraron archivos DICOM en el ZIP.")
 
         for idx, dicom_name in enumerate(dcm_files):
+
             try:
                 with archive.open(dicom_name) as file:
                     dicom_bytes = file.read()
 
                 dicom_output_path = os.path.join(output_dir, os.path.basename(dicom_name))
+
                 with open(dicom_output_path, "wb") as f:
                     f.write(dicom_bytes)
 
@@ -51,7 +56,7 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
 
                 try:
                     image = exposure.equalize_adapthist(image)
-                except Exception:
+                except:
                     image = np.clip(image, 0, 1)
 
                 image = (image * 255).astype("uint8")
@@ -73,14 +78,14 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
                     "archivodicomid": archivo_id,
                 }
 
+                # RUTA PUBLICA
                 image_paths.append(f"/static/series/{session_id}/{png_filename}")
 
-            except Exception:
+            except Exception as e:
+                print("⛔ Error procesando DICOM:", dicom_name, e)
                 continue
 
-    if not image_paths:
-        raise ValueError("No se pudieron procesar archivos DICOM válidos.")
-
+    # mapping.json
     mapping_path = os.path.join(output_dir, "mapping.json")
     with open(mapping_path, "w", encoding="utf-8") as f:
         json.dump(dicom_mapping, f, ensure_ascii=False, indent=2)
