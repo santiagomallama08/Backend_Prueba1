@@ -17,25 +17,25 @@ import os
 
 from config.db_config import get_connection
 
-# 📌 Importar carpeta persistente desde main.py
-from api.main import REPORTES_DIR   # /data/static/reportes
+# 📌 Importar rutas persistentes desde config.paths
+from config.paths import REPORTES_DIR   # /data/static/reportes
 
 
 def generar_reporte_estudio(session_id: str, user_id: int) -> str:
     """
-    Genera un reporte PDF completo del estudio DICOM con todas las segmentaciones y modelos STL.
+    Genera un reporte PDF del estudio, segmentaciones 2D/3D y modelos STL.
     """
 
-    # 📌 Ruta persistente en el volumen
+    # 📌 Directorio persistente ya creado en config.paths
     reportes_dir = REPORTES_DIR
     reportes_dir.mkdir(parents=True, exist_ok=True)
 
-    # Nombre del archivo PDF
+    # Archivo PDF
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     pdf_filename = f"reporte_{session_id}_{timestamp}.pdf"
     pdf_path = reportes_dir / pdf_filename
 
-    # Crear documento PDF
+    # Crear documento
     doc = SimpleDocTemplate(
         str(pdf_path),
         pagesize=A4,
@@ -45,13 +45,10 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
         bottomMargin=50,
     )
 
-    # Contenedor de elementos
     elements = []
-
-    # Estilos
     styles = getSampleStyleSheet()
 
-    # Estilo personalizado para título
+    # ================== Estilos ==================
     title_style = ParagraphStyle(
         "CustomTitle",
         parent=styles["Heading1"],
@@ -62,7 +59,6 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
         fontName="Helvetica-Bold",
     )
 
-    # Estilo para subtítulos
     subtitle_style = ParagraphStyle(
         "CustomSubtitle",
         parent=styles["Heading2"],
@@ -73,7 +69,6 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
         fontName="Helvetica-Bold",
     )
 
-    # Estilo para texto normal
     normal_style = ParagraphStyle(
         "CustomNormal",
         parent=styles["Normal"],
@@ -81,7 +76,7 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
         spaceAfter=8
     )
 
-    # ============ HEADER ============
+    # ================== HEADER ==================
     elements.append(Paragraph("REPORTE MÉDICO - ANÁLISIS DICOM", title_style))
     elements.append(Paragraph("Sistema de Prótesis Craneales", styles["Heading3"]))
     elements.append(Spacer(1, 0.3 * inch))
@@ -90,12 +85,12 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
     elements.append(Paragraph(f"<b>Fecha de generación:</b> {fecha_reporte}", normal_style))
     elements.append(Spacer(1, 0.2 * inch))
 
-    # ============ CONSULTA A LA BASE DE DATOS ============
+    # ================== BASE DE DATOS ==================
     conn = get_connection()
     cur = conn.cursor()
 
     try:
-        # Buscar datos del paciente
+        # -------- DATOS DEL PACIENTE --------
         cur.execute(
             """
             SELECT p.nombre_completo, p.tipo_documento, p.documento, p.edad,
@@ -110,9 +105,9 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
         )
         paciente_data = cur.fetchone()
 
-        # ================= PACIENTE =================
         if paciente_data:
             elements.append(Paragraph("DATOS DEL PACIENTE", subtitle_style))
+
             paciente_info = [
                 ["Nombre:", paciente_data[0] or "N/A"],
                 ["Documento:", f"{paciente_data[1]} {paciente_data[2]}" if paciente_data[1] else "N/A"],
@@ -132,19 +127,21 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
                     ]
                 )
             )
+
             elements.append(paciente_table)
             elements.append(Spacer(1, 0.3 * inch))
 
-            # Información del estudio
-            if paciente_data[7] or paciente_data[8]:
+            # -------- INFORMACIÓN DEL ESTUDIO --------
+            estudio_info = []
+            if paciente_data[7]:
+                estudio_info.append(["Fecha del estudio:", paciente_data[7].strftime("%d/%m/%Y")])
+            if paciente_data[8]:
+                estudio_info.append(["Tipo de estudio:", paciente_data[8]])
+            if paciente_data[9]:
+                estudio_info.append(["Diagnóstico:", paciente_data[9]])
+
+            if estudio_info:
                 elements.append(Paragraph("INFORMACIÓN DEL ESTUDIO", subtitle_style))
-                estudio_info = []
-                if paciente_data[7]:
-                    estudio_info.append(["Fecha del estudio:", paciente_data[7].strftime("%d/%m/%Y")])
-                if paciente_data[8]:
-                    estudio_info.append(["Tipo de estudio:", paciente_data[8]])
-                if paciente_data[9]:
-                    estudio_info.append(["Diagnóstico:", paciente_data[9]])
 
                 estudio_table = Table(estudio_info, colWidths=[2 * inch, 4 * inch])
                 estudio_table.setStyle(
@@ -158,10 +155,11 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
                 elements.append(estudio_table)
                 elements.append(Spacer(1, 0.3 * inch))
 
-        # ================= SEGMENTACIONES 2D =================
+        # -------- SEGMENTACIONES 2D --------
         cur.execute(
             """
-            SELECT pd.altura, pd.longitud, pd.ancho, pd.volumen, pd.unidad, pd.tipoprotesis, ad.fechacarga
+            SELECT pd.altura, pd.longitud, pd.ancho, pd.volumen, pd.unidad,
+                   pd.tipoprotesis, ad.fechacarga
             FROM protesisdimension pd
             LEFT JOIN archivodicom ad ON pd.archivodicomid = ad.archivodicomid
             WHERE ad.rutaarchivo LIKE %s AND pd.user_id = %s
@@ -169,6 +167,7 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
             """,
             (f"%{session_id}%", user_id),
         )
+
         seg2d_rows = cur.fetchall()
 
         if seg2d_rows:
@@ -186,8 +185,8 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
                     ["Fecha:", row[6].strftime("%d/%m/%Y") if row[6] else "N/A"],
                 ]
 
-                table = Table(seg2d_data, colWidths=[1.7 * inch, 4.3 * inch])
-                table.setStyle(
+                t = Table(seg2d_data, colWidths=[1.7 * inch, 4.3 * inch])
+                t.setStyle(
                     TableStyle(
                         [
                             ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#ede9fe")),
@@ -195,13 +194,14 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
                         ]
                     )
                 )
-                elements.append(table)
+                elements.append(t)
                 elements.append(Spacer(1, 0.2 * inch))
 
-        # ================= SEGMENTACIONES 3D =================
+        # -------- SEGMENTACIONES 3D --------
         cur.execute(
             """
-            SELECT volume_mm3, surface_mm2, bbox_x_mm, bbox_y_mm, bbox_z_mm, n_slices, created_at
+            SELECT volume_mm3, surface_mm2, bbox_x_mm, bbox_y_mm, bbox_z_mm,
+                   n_slices, created_at
             FROM segmentacion3d
             WHERE session_id = %s AND user_id = %s
             ORDER BY created_at DESC
@@ -218,13 +218,14 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
                 seg3d_data = [
                     ["Volumen:", f"{round(row[0])} mm³"],
                     ["Superficie:", f"{round(row[1])} mm²" if row[1] else "N/A"],
-                    ["Dimensiones (BBox):", f"{row[2]:.1f} × {row[3]:.1f} × {row[4]:.1f} mm"],
+                    ["Dimensiones (BBox):",
+                     f"{row[2]:.1f} × {row[3]:.1f} × {row[4]:.1f} mm"],
                     ["Slices:", str(row[5])],
                     ["Fecha:", row[6].strftime("%d/%m/%Y %H:%M") if row[6] else "N/A"],
                 ]
 
-                table = Table(seg3d_data, colWidths=[2 * inch, 4 * inch])
-                table.setStyle(
+                t = Table(seg3d_data, colWidths=[2 * inch, 4 * inch])
+                t.setStyle(
                     TableStyle(
                         [
                             ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#dbeafe")),
@@ -233,9 +234,9 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
                     )
                 )
                 elements.append(Spacer(1, 0.2 * inch))
-                elements.append(table)
+                elements.append(t)
 
-        # ================= MODELOS STL =================
+        # -------- MODELOS STL --------
         cur.execute(
             """
             SELECT path_stl, file_size_bytes, num_vertices, num_caras, created_at
@@ -259,8 +260,8 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
                     ["Fecha:", row[4].strftime("%d/%m/%Y %H:%M") if row[4] else "N/A"],
                 ]
 
-                table = Table(stl_data, colWidths=[1.6 * inch, 4.4 * inch])
-                table.setStyle(
+                t = Table(stl_data, colWidths=[1.6 * inch, 4.4 * inch])
+                t.setStyle(
                     TableStyle(
                         [
                             ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#dcfce7")),
@@ -269,15 +270,15 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
                     )
                 )
                 elements.append(Spacer(1, 0.15 * inch))
-                elements.append(table)
+                elements.append(t)
 
-        # ================= INFORMACIÓN TÉCNICA =================
+        # -------- INFO TÉCNICA --------
         elements.append(PageBreak())
         elements.append(Paragraph("INFORMACIÓN TÉCNICA", subtitle_style))
 
         tech_info = [
             ["Session ID:", session_id],
-            ["Sistema:", "DICOM Studio - Análisis de Prótesis Craneales"],
+            ["Sistema:", "DICOM Studio - Prótesis Craneales"],
             ["Versión:", "v1.1"],
         ]
 
@@ -290,25 +291,24 @@ def generar_reporte_estudio(session_id: str, user_id: int) -> str:
                 ]
             )
         )
-        elements.append(tech_table)
 
-        # ================= FOOTER =================
+        elements.append(tech_table)
         elements.append(Spacer(1, 0.5 * inch))
-        footer_text = """
-            <para align=center fontSize=8 textColor=#666666>
-            Este reporte ha sido generado automáticamente por el sistema DICOM Studio.<br/>
-            Para uso estrictamente académico y de investigación.<br/>
-            © 2025 - Sistema de Análisis DICOM para Prótesis Craneales
-            </para>
+
+        footer = """
+        <para align=center fontSize=8 textColor=#666666>
+        Reporte generado automáticamente por DICOM Studio.<br/>
+        © 2025 - Sistema para Prótesis Craneales Personalizadas.
+        </para>
         """
-        elements.append(Paragraph(footer_text, styles["Normal"]))
+        elements.append(Paragraph(footer, styles["Normal"]))
 
     finally:
         cur.close()
         conn.close()
 
-    # 📌 Generar PDF
+    # ================== GENERAR PDF ==================
     doc.build(elements)
 
-    # 📌 Devolver ruta pública accesible desde Vercel
+    # Ruta pública para frontend
     return f"/static/reportes/{pdf_filename}"
