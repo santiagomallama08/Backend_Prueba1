@@ -1,22 +1,14 @@
+# api/services/historial_services.py
 import os
 import re
 import shutil
 from typing import List, Dict
 from config.db_config import get_connection
 
-# ❗ Importamos la variable de entorno para saber dónde está el volumen
-PERSISTENT_STORAGE_BASE = os.environ.get(
-    "STORAGE_BASE_PATH", 
-    os.path.join("api", "static", "series") # Valor local por defecto
-)
-# --------------------------------------------------------
-
 
 def extraer_session_id(ruta: str) -> str:
     """Extrae el session_id desde la ruta del archivo usando regex."""
-    # Usamos un patrón más seguro que busca el UUID entre 'series/' y '/'
-    # Ejemplo: /.../series/UUID/archivo.dcm -> Extrae UUID
-    match = re.search(r"[\\/]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\\/]", ruta, re.IGNORECASE)
+    match = re.search(r"series[\\/](.*?)[\\/]", ruta)
     return match.group(1) if match else None
 
 
@@ -70,17 +62,13 @@ def obtener_historial_archivos(user_id: int) -> List[Dict]:
 
     for row in rows:
         ruta_relativa = row[2]
-        session_id = extraer_session_id(ruta_relativa)
-        
-        if not session_id:
+        ruta_absoluta = os.path.abspath(ruta_relativa)
+
+        if not os.path.exists(ruta_absoluta):
             continue
 
-        # ❗ VERIFICACIÓN DE EXISTENCIA CORREGIDA
-        # 1. Construir la ruta de la carpeta de sesión dentro del volumen
-        session_dir_path = os.path.join(PERSISTENT_STORAGE_BASE, session_id)
-        
-        # 2. Verificar si el directorio de la sesión existe
-        if not os.path.isdir(session_dir_path):
+        session_id = extraer_session_id(ruta_relativa)
+        if not session_id:
             continue
 
         # Solo guardar una entrada por session_id
@@ -121,20 +109,13 @@ def eliminar_serie_por_session_id(session_id: str, user_id: int) -> None:
         [f"%{session_id}%", user_id],
     )
     conn.commit()
-    
-    # ❗ Usar la variable de entorno para la ruta del volumen
-    storage_base = os.environ.get("STORAGE_BASE_PATH", "api/static/series")
 
     # 2. Eliminar la carpeta de imágenes y mapping
-    # Ya que STORAGE_BASE_PATH ahora es la raíz de las series, no necesitamos el subdirectorio 'series' aquí
-    ruta_series = os.path.join(storage_base, session_id)
+    ruta_series = os.path.abspath(f"api/static/series/{session_id}")
     if os.path.isdir(ruta_series):
         shutil.rmtree(ruta_series)
 
     # 3. Eliminar segmentaciones asociadas (si existen en disco)
-    # Asumo que las segmentaciones 2D no están en el volumen, sino en la ruta efímera.
-    # Si las segmentaciones 2D y 3D deben ser persistentes, también debes usar STORAGE_BASE_PATH para ellas.
-    # Por ahora, dejo la ruta original para las segmentaciones 2D y 3D si no están en la serie principal:
     ruta_segmentaciones = os.path.abspath(f"api/static/segmentations/{session_id}")
     if os.path.isdir(ruta_segmentaciones):
         shutil.rmtree(ruta_segmentaciones)
@@ -150,7 +131,9 @@ def _basename_sin_ext(ruta: str) -> str:
 def listar_segmentaciones_por_session_id(session_id: str, user_id: int) -> List[Dict]:
     """
     Lista segmentaciones (ProtesisDimension) asociadas a los DICOM cuya ruta contenga el session_id.
-    ...
+    Devuelve métricas + archivodicomid + (si existe) la ruta pública de la máscara.
+    Busca máscaras en api/static/segmentations (sin subcarpetas por session).
+    Filtrado por user_id para aislar datos por usuario.
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -158,8 +141,8 @@ def listar_segmentaciones_por_session_id(session_id: str, user_id: int) -> List[
     cur.execute(
         """
         SELECT pd.archivodicomid,
-              pd.altura, pd.volumen, pd.longitud, pd.ancho, pd.tipoprotesis, pd.unidad,
-              ad.rutaarchivo
+               pd.altura, pd.volumen, pd.longitud, pd.ancho, pd.tipoprotesis, pd.unidad,
+               ad.rutaarchivo
         FROM protesisdimension pd
         JOIN archivodicom ad ON ad.archivodicomid = pd.archivodicomid
         WHERE ad.rutaarchivo LIKE %s
@@ -175,7 +158,6 @@ def listar_segmentaciones_por_session_id(session_id: str, user_id: int) -> List[
     conn.close()
 
     resultados = []
-    # Usar os.path.abspath() para segmentations aquí es correcto si esa carpeta no es persistente
     segment_dir_abs = os.path.abspath("api/static/segmentations")
 
     for (
