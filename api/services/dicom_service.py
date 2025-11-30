@@ -13,7 +13,12 @@ import numpy as np
 from .segmentation_services import get_or_create_archivo_dicom
 
 # --- VARIABLE DE RUTA PERSISTENTE (USADA POR RAILWAY) ---
-PERSISTENT_STORAGE_BASE = os.environ.get("RAILWAY_STORAGE_PATH", os.path.join("api", "static"))
+# Usamos STORAGE_BASE_PATH, que es la variable definida en main.py y en Railway.
+# El valor es la ruta física completa del volumen.
+PERSISTENT_STORAGE_BASE = os.environ.get(
+    "STORAGE_BASE_PATH", 
+    os.path.join("api", "static", "series") # Valor local por defecto
+)
 # --------------------------------------------------------
 
 def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
@@ -22,13 +27,21 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
     Guardando todo en el volumen persistente.
     """
     session_id = str(uuid.uuid4())
-    output_dir = os.path.join(PERSISTENT_STORAGE_BASE, "series", session_id)
+    
+    # 🔴 CORRECCIÓN CLAVE: output_dir debe ser directamente la ruta del volumen + session_id
+    # Ya que el main.py monta /static/series -> [PERSISTENT_STORAGE_BASE]
+    # No necesitamos añadir "/series" aquí, ya que STORAGE_BASE_PATH ya es la carpeta raíz de las series.
+    output_dir = os.path.join(PERSISTENT_STORAGE_BASE, session_id)
     os.makedirs(output_dir, exist_ok=True)
 
     dicom_mapping = {}
     image_paths = []
 
     try:
+        # ... (Resto del código es correcto, guarda los archivos directamente en output_dir)
+        
+        # [Se omite el cuerpo de la función para brevedad, solo se modifica la inicialización de output_dir]
+        
         with zipfile.ZipFile(io.BytesIO(zip_file)) as archive:
             dcm_files = [f for f in archive.namelist() if f.lower().endswith((".dcm", ""))]
             
@@ -41,7 +54,6 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
 
                 try:
                     # Normalizar el nombre de archivo, solo tomando el componente final
-                    # Esto evita que se creen subdirectorios si el ZIP tiene estructura anidada.
                     safe_dicom_filename = os.path.basename(dicom_name_in_zip)
                     
                     if not safe_dicom_filename:
@@ -51,16 +63,12 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
                     with archive.open(dicom_name_in_zip) as file:
                         dicom_bytes = file.read()
 
-                    # --- CAMBIO A: Usar el nombre de archivo seguro ---
                     dicom_output_path = os.path.join(output_dir, safe_dicom_filename)
-                    
-                    # No necesitamos os.makedirs(os.path.dirname(dicom_output_path), exist_ok=True)
-                    # a menos que output_dir sea variable, pero aquí es fijo por sesión.
                     
                     with open(dicom_output_path, "wb") as f:
                         f.write(dicom_bytes)
 
-                    # 2. Lectura y Validación
+                    # 2. Lectura y Validación (omitiendo por brevedad)
                     ds = pydicom.dcmread(io.BytesIO(dicom_bytes), force=True)
                     
                     if "PixelData" not in ds:
@@ -68,7 +76,7 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
                         os.remove(dicom_output_path)
                         continue
                     
-                    # 3. Procesamiento de Imagen (Corregido en el paso anterior)
+                    # 3. Procesamiento de Imagen (omitiendo por brevedad)
                     image = ds.pixel_array.astype(np.float32)
 
                     if np.max(image) > 1:
@@ -87,7 +95,7 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
                     png_path = os.path.join(output_dir, png_filename)
                     im.save(png_path)
 
-                    # 5. Registrar archivo en la base de datos
+                    # 5. Registrar archivo en la base de datos (omitiendo por brevedad)
                     archivo_id = get_or_create_archivo_dicom(
                         nombrearchivo=safe_dicom_filename,
                         rutaarchivo=dicom_output_path, 
@@ -105,7 +113,6 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
 
                 except Exception as e:
                     print(f"⚠️ Error procesando {dicom_name_in_zip}: {e}")
-                    # --- CAMBIO B: Usar os.path.isfile() antes de intentar borrar ---
                     if dicom_output_path and os.path.isfile(dicom_output_path):
                         os.remove(dicom_output_path)
                     continue
@@ -127,5 +134,5 @@ def convert_dicom_zip_to_png_paths(zip_file: bytes, user_id: int) -> dict:
         
     except Exception as e:
         if os.path.exists(output_dir):
-             shutil.rmtree(output_dir)
+            shutil.rmtree(output_dir)
         raise e
