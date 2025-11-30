@@ -50,16 +50,8 @@ def eliminar_segmentacion(
 
 @router.get("/historial/archivos")
 def listar_historial_archivos(x_user_id: int = Header(..., alias="X-User-Id")):
-    """
-    Retorna el historial de archivos para el usuario, incluyendo el user_id para diagnóstico.
-    """
-    series = obtener_historial_archivos(user_id=x_user_id)
-    
-    # 🔴 DEVOLVEMOS EL USER ID PARA QUE EL FRONTEND LO MUESTRE
-    return {
-        "user_id": x_user_id,
-        "series": series
-    }
+    return obtener_historial_archivos(user_id=x_user_id)
+
 
 @router.delete("/historial/series/{session_id}")
 def eliminar_serie(session_id: str, x_user_id: int = Header(..., alias="X-User-Id")):
