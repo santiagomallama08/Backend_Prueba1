@@ -17,7 +17,7 @@ from ..services.dicom_service import convert_dicom_zip_to_png_paths
 
 router = APIRouter()
 
-# 🔥 Ruta GLOBAL del volumen de Railway
+# 🔥 Ruta fija donde Railway montó tu volumen
 VOLUME_BASE = Path("/app/api/static/series")
 
 
@@ -64,10 +64,9 @@ async def upload_dicom_series(
     try:
         zip_bytes = await file.read()
 
-        # 🔥 El servicio de conversión debe guardar SIEMPRE en VOLUME_BASE
-        result = convert_dicom_zip_to_png_paths(
-            zip_bytes, user_id=x_user_id, base_output_dir=VOLUME_BASE
-        )
+        # ⬇️ NO LE PASAMOS base_output_dir, tu función NO LO SOPORTA
+        # La función ya guarda en api/static/series/, y ese path YA ES EL VOLUMEN.
+        result = convert_dicom_zip_to_png_paths(zip_bytes, user_id=x_user_id)
 
         return JSONResponse(content=result)
 
@@ -82,7 +81,7 @@ async def segmentar_dicom_endpoint(file: UploadFile = File(...)):
             contents = await file.read()
             tmp.write(contents)
             dicom_path = tmp.name
-        
+
             from ..services.segmentation_services import segmentar_dicom
             resultado = segmentar_dicom(dicom_path)
 
@@ -95,7 +94,7 @@ async def segmentar_dicom_endpoint(file: UploadFile = File(...)):
 @router.get("/series-mapping/")
 def obtener_mapping_de_serie(session_id: str = Query(..., description="UUID de la serie cargada")):
     try:
-        # 🔥 Ruta usando el volumen verdadero
+        # 🔥 mapping REAL en el volumen
         mapping_path = VOLUME_BASE / session_id / "mapping.json"
 
         if not mapping_path.exists():
@@ -118,7 +117,6 @@ async def segmentar_desde_mapping(
     x_user_id: int = Header(..., alias="X-User-Id"),
 ):
     try:
-        # 🔥 La ruta correcta del volumen
         base_dir = VOLUME_BASE / session_id
         mapping_path = base_dir / "mapping.json"
 
