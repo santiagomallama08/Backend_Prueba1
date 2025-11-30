@@ -17,23 +17,20 @@ from ..services.dicom_service import convert_dicom_zip_to_png_paths
 
 router = APIRouter()
 
+# 🔥 Ruta GLOBAL del volumen de Railway
+VOLUME_BASE = Path("/app/api/static/series")
+
 
 @router.post("/upload-dicom")
 async def upload_dicom(file: UploadFile = File(...)):
     try:
-        # === CAMBIO: Usar tempfile para gestión segura de archivos temporales ===
-        # Esto garantiza que el archivo se elimine automáticamente al salir del bloque 'with'.
         with tempfile.NamedTemporaryFile(delete=True, suffix=file.filename) as tmp:
-            
-            # Guardar el contenido en el archivo temporal
             contents = await file.read()
             tmp.write(contents)
-            tmp_path = tmp.name # Obtiene la ruta del archivo temporal
+            tmp_path = tmp.name
 
-            # Leer el archivo con pydicom
             dicom = pydicom.dcmread(tmp_path)
 
-            # Extraer metadatos
             metadata = {
                 "PatientID": dicom.get("PatientID", "N/A"),
                 "StudyDate": dicom.get("StudyDate", "N/A"),
@@ -44,8 +41,6 @@ async def upload_dicom(file: UploadFile = File(...)):
                 "SOPInstanceUID": dicom.get("SOPInstanceUID", "N/A"),
             }
 
-            # Ya no se necesita os.remove(temp_path)
-
             return JSONResponse(
                 content={
                     "message": "Archivo DICOM subido y procesado exitosamente.",
@@ -54,7 +49,6 @@ async def upload_dicom(file: UploadFile = File(...)):
             )
 
     except Exception as e:
-        # Captura errores de procesamiento DICOM o cualquier otro error
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
@@ -70,8 +64,11 @@ async def upload_dicom_series(
     try:
         zip_bytes = await file.read()
 
-        # El servicio de conversión guardará los archivos en el volumen persistente
-        result = convert_dicom_zip_to_png_paths(zip_bytes, user_id=x_user_id)
+        # 🔥 El servicio de conversión debe guardar SIEMPRE en VOLUME_BASE
+        result = convert_dicom_zip_to_png_paths(
+            zip_bytes, user_id=x_user_id, base_output_dir=VOLUME_BASE
+        )
+
         return JSONResponse(content=result)
 
     except Exception as e:
@@ -81,14 +78,11 @@ async def upload_dicom_series(
 @router.post("/segmentar-dicom/")
 async def segmentar_dicom_endpoint(file: UploadFile = File(...)):
     try:
-        # === CAMBIO: Usar tempfile para gestión segura de archivos temporales ===
         with tempfile.NamedTemporaryFile(delete=True, suffix=file.filename) as tmp:
             contents = await file.read()
             tmp.write(contents)
             dicom_path = tmp.name
         
-            # Esto asume que el servicio segmentar_dicom lee el archivo, 
-            # pero no guarda el resultado de forma permanente en esta función.
             from ..services.segmentation_services import segmentar_dicom
             resultado = segmentar_dicom(dicom_path)
 
@@ -101,11 +95,8 @@ async def segmentar_dicom_endpoint(file: UploadFile = File(...)):
 @router.get("/series-mapping/")
 def obtener_mapping_de_serie(session_id: str = Query(..., description="UUID de la serie cargada")):
     try:
-        # Nota: Usar BASE_DIR puede ser inconsistente con la ruta de montaje del volumen.
-        # Por ahora, confiamos en la ruta de archivos estáticos.
-        BASE_DIR = Path(__file__).resolve().parent.parent
-        # La ruta del mapping debe coincidir con la ruta donde está montado el volumen en el contenedor
-        mapping_path = BASE_DIR / "static" / "series" / session_id / "mapping.json"
+        # 🔥 Ruta usando el volumen verdadero
+        mapping_path = VOLUME_BASE / session_id / "mapping.json"
 
         if not mapping_path.exists():
             return JSONResponse(
@@ -127,11 +118,11 @@ async def segmentar_desde_mapping(
     x_user_id: int = Header(..., alias="X-User-Id"),
 ):
     try:
-        # Esta ruta debe coincidir con la ruta base del Volumen /api/static/series/
-        base_dir = os.path.join("api", "static", "series", session_id)
-        mapping_path = os.path.join(base_dir, "mapping.json")
+        # 🔥 La ruta correcta del volumen
+        base_dir = VOLUME_BASE / session_id
+        mapping_path = base_dir / "mapping.json"
 
-        if not os.path.exists(mapping_path):
+        if not mapping_path.exists():
             raise FileNotFoundError("No se encontró el archivo mapping.json")
 
         with open(mapping_path, "r") as f:
@@ -144,14 +135,14 @@ async def segmentar_desde_mapping(
         dicom_filename = dicom_info["dicom_name"]
         archivodicomid = dicom_info["archivodicomid"]
 
-        dicom_path = os.path.join(base_dir, dicom_filename)
-        if not os.path.exists(dicom_path):
+        dicom_path = base_dir / dicom_filename
+        if not dicom_path.exists():
             raise FileNotFoundError(f"No se encontró el archivo DICOM: {dicom_filename}")
 
         from ..services.segmentation_services import segmentar_dicom
 
         return segmentar_dicom(
-            dicom_path,
+            str(dicom_path),
             archivodicomid=archivodicomid,
             user_id=x_user_id,
         )
